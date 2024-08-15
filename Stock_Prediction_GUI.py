@@ -1,4 +1,8 @@
 import sys
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QProgressBar, QLabel, QLineEdit, QPushButton, QTextEdit, 
                              QComboBox, QStatusBar, QMessageBox)
@@ -6,10 +10,41 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.dates as mdates
 from datetime import datetime, timedelta
-import pandas as pd
+from tensorflow import keras
 from Stock_Predictor import fetch_stock_data, prepare_data, build_model, predict_next_day
+
+class PredictionThread(QThread):
+    finished = pyqtSignal(float)
+    progress = pyqtSignal(int, int, float)  # Emit current epoch, total epochs, and loss
+
+    def __init__(self, ticker, df, sequences, labels, scaler):
+        QThread.__init__(self)
+        self.ticker = ticker
+        self.df = df
+        self.sequences = sequences
+        self.labels = labels
+        self.scaler = scaler
+        self.total_epochs = 25  # Set this to match your model's epochs
+
+    def run(self):
+        model = build_model((self.sequences.shape[1], 1))
+        
+        # Custom callback to emit progress
+        class ProgressCallback(keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                self.model.stop_training = False
+                current_loss = logs.get('loss', 0)
+                self.model.thread.progress.emit(epoch + 1, self.model.thread.total_epochs, current_loss)
+
+        # Attach the thread to the model for the callback to access
+        model.thread = self
+        
+        model.fit(self.sequences, self.labels, epochs=self.total_epochs, batch_size=32, verbose=0,
+                  callbacks=[ProgressCallback()])
+        
+        prediction = predict_next_day(model, self.sequences, self.scaler)
+        self.finished.emit(prediction)
 
 class ApiKeyWindow(QWidget):
     def __init__(self, parent=None):
@@ -40,28 +75,6 @@ class ApiKeyWindow(QWidget):
             self.parent.show_main_window()
         else:
             QMessageBox.warning(self, 'Invalid Input', 'Please enter a valid API key.')
-
-class PredictionThread(QThread):
-    finished = pyqtSignal(float)
-    progress = pyqtSignal(int)  # Emit an integer for progress
-
-    def __init__(self, ticker, df, sequences, labels, scaler):
-        QThread.__init__(self)
-        self.ticker = ticker
-        self.df = df
-        self.sequences = sequences
-        self.labels = labels
-        self.scaler = scaler
-
-    def run(self):
-        self.progress.emit(10)
-        model = build_model((self.sequences.shape[1], 1))
-        self.progress.emit(30)
-        model.fit(self.sequences, self.labels, epochs=25, batch_size=32, verbose=1)
-        self.progress.emit(80)
-        prediction = predict_next_day(model, self.sequences, self.scaler)
-        self.progress.emit(100)
-        self.finished.emit(prediction)
 
 class StockPredictionApp(QMainWindow):
     def __init__(self):
@@ -106,11 +119,20 @@ class StockPredictionApp(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
 
+        self.epoch_progress = QProgressBar(self.main_window)
+        self.epoch_progress.setRange(0, 100)
+        self.epoch_progress.setValue(0)
+        self.epoch_progress.setFormat("Epoch Progress: %p%")
+        
+        self.loss_label = QLabel("Current Loss: N/A", self.main_window)
+
         layout.addWidget(self.ticker_input)
         layout.addWidget(self.time_frame)
         layout.addWidget(self.predict_button)
         layout.addWidget(self.results_text)
-        layout.addWidget(self.progress_bar)
+        # layout.addWidget(self.progress_bar)
+        layout.addWidget(self.epoch_progress)
+        layout.addWidget(self.loss_label)
 
         self.figure = Figure(figsize=(5, 4), dpi=100)
         self.canvas = FigureCanvas(self.figure)
@@ -138,20 +160,20 @@ class StockPredictionApp(QMainWindow):
             return
 
         try:
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
+            # self.progress_bar.setVisible(True)
+            # self.progress_bar.setValue(0)
+            self.epoch_progress.setValue(0)
+            self.loss_label.setText("Current Loss: N/A")
 
             self.status_bar.showMessage("Fetching stock data...")
-            self.df = fetch_stock_data(ticker, self.api_key)  # Use the stored API key
+            self.df = fetch_stock_data(ticker, self.api_key)
             
             if self.df is None:
-                raise ValueError(f"No data could be fetched for ticker '{ticker}'. Please check the ticker symbol.")
-
+                raise ValueError(f"No data could be fetched for ticker '{ticker}'. Please check the ticker symbol or API key.")
 
             self.status_bar.showMessage("Preparing data...")
             self.sequences, self.labels, self.scaler = prepare_data(self.df, sequence_length=60)
 
-            # Plot current data based on selected time frame
             self.status_bar.showMessage("Plotting current data...")
             time_frame = self.time_frame.currentText()
             if time_frame == "1 Month":
@@ -169,11 +191,10 @@ class StockPredictionApp(QMainWindow):
 
             self.update_plot()
 
-            # Start prediction in a separate thread
             self.status_bar.showMessage("Starting prediction process...")
             self.prediction_thread = PredictionThread(ticker, self.df, self.sequences, self.labels, self.scaler)
             self.prediction_thread.finished.connect(self.update_prediction)
-            self.prediction_thread.progress.connect(self.update_progress)
+            self.prediction_thread.progress.connect(self.update_detailed_progress)
             self.prediction_thread.start()
 
             self.results_text.setText("Calculating prediction...")
@@ -181,21 +202,19 @@ class StockPredictionApp(QMainWindow):
         except ValueError as ve:
             self.results_text.setText(f"An error occurred: {str(ve)}")
             self.status_bar.showMessage("Error occurred")
-            self.progress_bar.setVisible(False)
+            # self.progress_bar.setVisible(False)
 
         except Exception as e:
             self.results_text.setText(f"An error occurred: {str(e)}")
             self.status_bar.showMessage("Error occurred")
-            self.progress_bar.setVisible(False)
+            # self.progress_bar.setVisible(False)
 
     def update_plot(self):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         
-        # Plotting the actual close prices
         ax.plot(self.df.index, self.df['Close'], label='Actual Close Price', color='b', marker='o', markersize=4, linestyle='-')
         
-        # Plotting the predicted price
         if self.prediction is not None:
             last_date = self.df.index[-1]
             next_date = last_date + pd.Timedelta(days=1)
@@ -205,37 +224,32 @@ class StockPredictionApp(QMainWindow):
         ax.set_xlabel('Date', fontsize=12)
         ax.set_ylabel('Price ($)', fontsize=12)
         
-        # Enhancing the x-axis and y-axis details
-        ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=1))  # Show major ticks every week
-        # ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))  # Show minor ticks every day
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))  # Shorter date format
+        ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
         ax.xaxis.set_minor_formatter(mdates.DateFormatter('%d'))
         
         ax.grid(which='both', linestyle='--', linewidth=0.5)
-        ax.tick_params(axis='x', rotation=45, labelsize=10)  # Rotate date labels for better readability
+        ax.tick_params(axis='x', rotation=45, labelsize=10)
         ax.tick_params(axis='y', labelsize=10)
         
-        # Adjust the layout to provide more space for labels
         self.figure.tight_layout(pad=2.0)
         
-        # Adding a legend
         ax.legend(fontsize=12)
         
         self.canvas.draw()
 
-    def update_status(self, message):
-        self.status_bar.showMessage(message)
-
-    def update_progress(self, value):
-        self.progress_bar.setValue(value)
-        if value == 100:
-            self.progress_bar.setVisible(False)
+    def update_detailed_progress(self, current_epoch, total_epochs, loss):
+        progress_percentage = (current_epoch / total_epochs) * 100
+        self.epoch_progress.setValue(int(progress_percentage))
+        self.loss_label.setText(f"Current Loss: {loss:.6f}")
+        self.status_bar.showMessage(f"Training: Epoch {current_epoch}/{total_epochs}")
 
     def update_prediction(self, next_day_price):
         self.prediction = next_day_price
         self.results_text.setText(f"Predicted next day price: {next_day_price:.2f}")
         self.status_bar.showMessage("Prediction complete.")
         self.update_plot()
+        # self.progress_bar.setVisible(False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
