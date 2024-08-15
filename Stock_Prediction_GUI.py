@@ -3,9 +3,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QProgressBar, QLabel, QLineEdit, QPushButton, QTextEdit, 
-                             QComboBox, QStatusBar, QMessageBox)
+                             QComboBox, QStatusBar, QMessageBox, QSpinBox)
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -18,26 +18,24 @@ class PredictionThread(QThread):
     finished = pyqtSignal(float)
     progress = pyqtSignal(int, int, float)  # Emit current epoch, total epochs, and loss
 
-    def __init__(self, ticker, df, sequences, labels, scaler):
+    def __init__(self, ticker, df, sequences, labels, scaler, epochs):
         QThread.__init__(self)
         self.ticker = ticker
         self.df = df
         self.sequences = sequences
         self.labels = labels
         self.scaler = scaler
-        self.total_epochs = 25  # Set this to match your model's epochs
+        self.total_epochs = epochs
 
     def run(self):
         model = build_model((self.sequences.shape[1], 1))
         
-        # Custom callback to emit progress
         class ProgressCallback(keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None):
                 self.model.stop_training = False
                 current_loss = logs.get('loss', 0)
                 self.model.thread.progress.emit(epoch + 1, self.model.thread.total_epochs, current_loss)
 
-        # Attach the thread to the model for the callback to access
         model.thread = self
         
         model.fit(self.sequences, self.labels, epochs=self.total_epochs, batch_size=32, verbose=0,
@@ -103,35 +101,43 @@ class StockPredictionApp(QMainWindow):
     def init_main_window(self):
         layout = QVBoxLayout(self.main_window)
 
+        input_layout = QHBoxLayout()
         self.ticker_input = QLineEdit(self.main_window)
         self.ticker_input.setPlaceholderText('Enter Stock Ticker')
-        
-        self.predict_button = QPushButton('Predict', self.main_window)
-        self.predict_button.clicked.connect(self.fetch_data_and_plot)
+        input_layout.addWidget(self.ticker_input)
         
         self.time_frame = QComboBox(self.main_window)
         self.time_frame.addItems(['1 Month', '3 Month', '6 Month', '1 Year'])
+        input_layout.addWidget(self.time_frame)
+
+        self.epoch_input = QSpinBox(self.main_window)
+        self.epoch_input.setRange(1, 100)
+        self.epoch_input.setValue(25)
+        self.epoch_input.setPrefix("Epochs: ")
+        input_layout.addWidget(self.epoch_input)
+
+        layout.addLayout(input_layout)
+        
+        self.predict_button = QPushButton('Predict', self.main_window)
+        self.predict_button.clicked.connect(self.fetch_data_and_plot)
+        layout.addWidget(self.predict_button)
 
         self.results_text = QTextEdit(self.main_window)
         self.results_text.setReadOnly(True)
+        layout.addWidget(self.results_text)
         
-        self.progress_bar = QProgressBar(self.main_window)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False)
+        # self.progress_bar = QProgressBar(self.main_window)
+        # self.progress_bar.setValue(0)
+        # self.progress_bar.setVisible(False)
+        # layout.addWidget(self.progress_bar)
 
         self.epoch_progress = QProgressBar(self.main_window)
         self.epoch_progress.setRange(0, 100)
         self.epoch_progress.setValue(0)
         self.epoch_progress.setFormat("Epoch Progress: %p%")
+        layout.addWidget(self.epoch_progress)
         
         self.loss_label = QLabel("Current Loss: N/A", self.main_window)
-
-        layout.addWidget(self.ticker_input)
-        layout.addWidget(self.time_frame)
-        layout.addWidget(self.predict_button)
-        layout.addWidget(self.results_text)
-        # layout.addWidget(self.progress_bar)
-        layout.addWidget(self.epoch_progress)
         layout.addWidget(self.loss_label)
 
         self.figure = Figure(figsize=(5, 4), dpi=100)
@@ -155,6 +161,8 @@ class StockPredictionApp(QMainWindow):
 
     def fetch_data_and_plot(self):
         ticker = self.ticker_input.text().upper()
+        epochs = self.epoch_input.value()
+        
         if not ticker:
             self.results_text.setText("Please enter a valid ticker symbol.")
             return
@@ -192,12 +200,12 @@ class StockPredictionApp(QMainWindow):
             self.update_plot()
 
             self.status_bar.showMessage("Starting prediction process...")
-            self.prediction_thread = PredictionThread(ticker, self.df, self.sequences, self.labels, self.scaler)
+            self.prediction_thread = PredictionThread(ticker, self.df, self.sequences, self.labels, self.scaler, epochs)
             self.prediction_thread.finished.connect(self.update_prediction)
             self.prediction_thread.progress.connect(self.update_detailed_progress)
             self.prediction_thread.start()
 
-            self.results_text.setText("Calculating prediction...")
+            self.results_text.setText(f"Calculating prediction using {epochs} epochs...")
 
         except ValueError as ve:
             self.results_text.setText(f"An error occurred: {str(ve)}")
