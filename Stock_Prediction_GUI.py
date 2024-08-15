@@ -1,17 +1,45 @@
 import sys
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QProgressBar, QLabel, QLineEdit, QPushButton, QTextEdit, 
-                             QComboBox, QStatusBar)
+                             QComboBox, QStatusBar, QMessageBox)
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import matplotlib.dates as mdates
 from datetime import datetime, timedelta
+import pandas as pd
 from Stock_Predictor import fetch_stock_data, prepare_data, build_model, predict_next_day
+
+class ApiKeyWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.initUI()
+
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        self.api_key_input = QLineEdit(self)
+        self.api_key_input.setPlaceholderText('Enter Alpha Vantage API Key')
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        
+        self.submit_button = QPushButton('Submit', self)
+        self.submit_button.clicked.connect(self.submit_api_key)
+        
+        layout.addWidget(QLabel('Please enter your Alpha Vantage API Key:'))
+        layout.addWidget(self.api_key_input)
+        layout.addWidget(self.submit_button)
+        
+        self.setLayout(layout)
+
+    def submit_api_key(self):
+        api_key = self.api_key_input.text()
+        if api_key:
+            self.parent.set_api_key(api_key)
+            self.parent.show_main_window()
+        else:
+            QMessageBox.warning(self, 'Invalid Input', 'Please enter a valid API key.')
 
 class PredictionThread(QThread):
     finished = pyqtSignal(float)
@@ -38,48 +66,56 @@ class PredictionThread(QThread):
 class StockPredictionApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.api_key = None
+        self.initUI()
+
+    def initUI(self):
         self.setWindowTitle('Stock Price Prediction')
-        self.setGeometry(100, 100, 800, 650)
+        self.setGeometry(100, 100, 800, 600)
 
-        # Add API key input
-        self.api_key_input = QLineEdit(self)
-        self.api_key_input.setPlaceholderText('Enter Alpha Vantage API Key')
-        self.api_key_input.setEchoMode(QLineEdit.Password)  # Hide the API key
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
 
-        self.ticker_input = QLineEdit(self)
+        self.api_key_window = ApiKeyWindow(self)
+        self.main_window = QWidget()
+
+        self.init_main_window()
+
+        self.central_layout = QVBoxLayout(self.central_widget)
+        self.central_layout.addWidget(self.api_key_window)
+        self.central_layout.addWidget(self.main_window)
+
+        self.main_window.hide()  # Initially hide the main window
+
+    def init_main_window(self):
+        layout = QVBoxLayout(self.main_window)
+
+        self.ticker_input = QLineEdit(self.main_window)
         self.ticker_input.setPlaceholderText('Enter Stock Ticker')
         
-        self.predict_button = QPushButton('Predict', self)
+        self.predict_button = QPushButton('Predict', self.main_window)
         self.predict_button.clicked.connect(self.fetch_data_and_plot)
         
-        self.time_frame = QComboBox(self)
+        self.time_frame = QComboBox(self.main_window)
         self.time_frame.addItems(['1 Month', '3 Month', '6 Month', '1 Year'])
 
-        self.results_text = QTextEdit(self)
+        self.results_text = QTextEdit(self.main_window)
         self.results_text.setReadOnly(True)
         
-        self.progress_bar = QProgressBar(self)
+        self.progress_bar = QProgressBar(self.main_window)
         self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False)  # Initially hidden
+        self.progress_bar.setVisible(False)
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.api_key_input)
         layout.addWidget(self.ticker_input)
         layout.addWidget(self.time_frame)
         layout.addWidget(self.predict_button)
         layout.addWidget(self.results_text)
         layout.addWidget(self.progress_bar)
 
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
-
-        # Graph section
         self.figure = Figure(figsize=(5, 4), dpi=100)
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
 
-        # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
@@ -88,24 +124,29 @@ class StockPredictionApp(QMainWindow):
         self.scaler = None
         self.prediction = None
 
+    def set_api_key(self, key):
+        self.api_key = key
+
+    def show_main_window(self):
+        self.api_key_window.hide()
+        self.main_window.show()
+
     def fetch_data_and_plot(self):
         ticker = self.ticker_input.text().upper()
-        api_key = self.api_key_input.text()
-
-        if not ticker or not api_key:
-            self.results_text.setText("Please enter a valid ticker symbol and API key.")
+        if not ticker:
+            self.results_text.setText("Please enter a valid ticker symbol.")
             return
 
         try:
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
 
-            # Fetch and prepare data
             self.status_bar.showMessage("Fetching stock data...")
-            self.df = fetch_stock_data(ticker)
+            self.df = fetch_stock_data(ticker, self.api_key)  # Use the stored API key
             
             if self.df is None:
-                raise ValueError(f"No data could be fetched for ticker '{ticker}'. Please check the ticker symbol or API key.")
+                raise ValueError(f"No data could be fetched for ticker '{ticker}'. Please check the ticker symbol.")
+
 
             self.status_bar.showMessage("Preparing data...")
             self.sequences, self.labels, self.scaler = prepare_data(self.df, sequence_length=60)
