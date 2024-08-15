@@ -101,23 +101,41 @@ class StockPredictionApp(QMainWindow):
     def init_main_window(self):
         layout = QVBoxLayout(self.main_window)
 
-        input_layout = QHBoxLayout()
+        # Ticker input
+        ticker_layout = QHBoxLayout()
         self.ticker_input = QLineEdit(self.main_window)
         self.ticker_input.setPlaceholderText('Enter Stock Ticker')
-        input_layout.addWidget(self.ticker_input)
-        
+        ticker_layout.addWidget(self.ticker_input)
+        ticker_info_button = QPushButton("(i)", self.main_window)
+        ticker_info_button.setFixedSize(20, 20)
+        ticker_info_button.clicked.connect(lambda: self.show_info("Stock Ticker", "Enter the stock symbol you want to predict (e.g., AAPL for Apple Inc.)."))
+        ticker_layout.addWidget(ticker_info_button)
+        layout.addLayout(ticker_layout)
+
+        # Time frame selection
+        time_frame_layout = QHBoxLayout()
         self.time_frame = QComboBox(self.main_window)
         self.time_frame.addItems(['1 Month', '3 Month', '6 Month', '1 Year'])
-        input_layout.addWidget(self.time_frame)
+        time_frame_layout.addWidget(self.time_frame)
+        time_frame_info_button = QPushButton("(i)", self.main_window)
+        time_frame_info_button.setFixedSize(20, 20)
+        time_frame_info_button.clicked.connect(lambda: self.show_info("Time Frame", "Select the historical data range to use for prediction. This affects both the displayed graph and the data used to train the model."))
+        time_frame_layout.addWidget(time_frame_info_button)
+        layout.addLayout(time_frame_layout)
 
+        # Epoch input
+        epoch_layout = QHBoxLayout()
         self.epoch_input = QSpinBox(self.main_window)
         self.epoch_input.setRange(1, 100)
         self.epoch_input.setValue(25)
         self.epoch_input.setPrefix("Epochs: ")
-        input_layout.addWidget(self.epoch_input)
+        epoch_layout.addWidget(self.epoch_input)
+        epoch_info_button = QPushButton("(i)", self.main_window)
+        epoch_info_button.setFixedSize(20, 20)
+        epoch_info_button.clicked.connect(lambda: self.show_info("Epochs", "The number of times the model will iterate over the entire dataset during training. More epochs can lead to better accuracy but take longer to compute."))
+        epoch_layout.addWidget(epoch_info_button)
+        layout.addLayout(epoch_layout)
 
-        layout.addLayout(input_layout)
-        
         self.predict_button = QPushButton('Predict', self.main_window)
         self.predict_button.clicked.connect(self.fetch_data_and_plot)
         layout.addWidget(self.predict_button)
@@ -125,11 +143,6 @@ class StockPredictionApp(QMainWindow):
         self.results_text = QTextEdit(self.main_window)
         self.results_text.setReadOnly(True)
         layout.addWidget(self.results_text)
-        
-        # self.progress_bar = QProgressBar(self.main_window)
-        # self.progress_bar.setValue(0)
-        # self.progress_bar.setVisible(False)
-        # layout.addWidget(self.progress_bar)
 
         self.epoch_progress = QProgressBar(self.main_window)
         self.epoch_progress.setRange(0, 100)
@@ -151,6 +164,9 @@ class StockPredictionApp(QMainWindow):
         self.sequences = None
         self.scaler = None
         self.prediction = None
+
+    def show_info(self, title, message):
+        QMessageBox.information(self, title, message)
 
     def set_api_key(self, key):
         self.api_key = key
