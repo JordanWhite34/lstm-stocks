@@ -39,6 +39,9 @@ This project is a Python-based stock price prediction tool with a graphical user
 
 ## Usage
 
+![Alt Text](images/1.png)
+![Alt Text](images/2.png)
+
 1. Run the GUI application:
    ```
    python Stock_Prediction_GUI.py
